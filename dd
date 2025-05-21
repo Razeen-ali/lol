@@ -1,0 +1,46 @@
+  getBankingDetails(nbks: string[]): Observable<Record<string, BankingResponse>> {
+    try {
+      console.log('NBKs being sent to banking API:', nbks);
+      console.log('Banking API URL:', this.BANKING_API);
+
+      const headers = new HttpHeaders()
+        .set(environment.bankingApi.key, environment.bankingApi.value);
+
+      console.log('Request headers:', headers);
+
+      return this.http.post<any>(this.BANKING_API, nbks, { headers }).pipe(
+        tap(rawResponse => {
+          console.log('Raw banking API response:', rawResponse);
+        }),
+        map(response => {
+          // Handle both array and record formats
+          let result: Record<string, BankingResponse> = {};
+          
+          if (Array.isArray(response)) {
+            response.forEach(item => {
+              if (item && item.nbkid) {
+                result[item.nbkid] = item;
+              }
+            });
+          } else if (typeof response === 'object') {
+            result = response;
+          }
+          
+          console.log('Transformed banking response:', result);
+          return result;
+        }),
+        catchError((error: HttpErrorResponse) => {
+          console.error('Error in Banking API:', error);
+          console.error('Error status:', error.status);
+          console.error('Error message:', error.message);
+          if (error.error) {
+            console.error('Error details:', error.error);
+          }
+          return of({});
+        })
+      );
+    } catch (error) {
+      console.error('Error in getBankingDetails:', error);
+      return of({});
+    }
+  }
