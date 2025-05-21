@@ -1,14 +1,18 @@
-  getBankingDetails(nbks: string[]): Observable<Record<string, BankingResponse>> {
+getBankingDetails(nbks: string[]): Observable<Record<string, BankingResponse>> {
     try {
       console.log('NBKs being sent to banking API:', nbks);
       console.log('Banking API URL:', this.BANKING_API);
+
+      // Format the NBKs array exactly as shown in Postman
+      const formattedNbks = nbks.map(nbk => nbk.toUpperCase());
 
       const headers = new HttpHeaders()
         .set(environment.bankingApi.key, environment.bankingApi.value);
 
       console.log('Request headers:', headers);
+      console.log('Formatted payload:', formattedNbks);
 
-      return this.http.post<any>(this.BANKING_API, nbks, { headers }).pipe(
+      return this.http.post<any>(this.BANKING_API, formattedNbks, { headers }).pipe(
         tap(rawResponse => {
           console.log('Raw banking API response:', rawResponse);
         }),
