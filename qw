@@ -1,0 +1,249 @@
+import { Injectable } from '@angular/core';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { Observable, forkJoin, of } from 'rxjs';
+import { map, tap, catchError, mergeMap } from 'rxjs/operators';
+import { environment } from '../../environments/environment';
+
+export interface CSARResponse {
+  Associate: {
+    Status: string;
+  };
+  IsAutoLogTouchpointEnable: boolean;
+  IsFromOutlookSync: boolean;
+  IsToOutSync: boolean;
+  AssociateShortName: string;
+}
+
+export interface BankingResponse {
+  nbkid: string;
+  EntitlementStartDate: string;
+  LobName: string;
+  JobName: string;
+  LastSyncDate: string;
+}
+
+export interface NBKrequirements {
+  nbk: string;
+  name: string;
+  adGroup: boolean;
+  autoLog: boolean;
+  outFrom: boolean;
+  outTo: boolean;
+  lob: string;
+  lobStatus: boolean;
+  hangfireJob: string;
+  hangfireStatus: boolean;
+  entitlementStartDate: string;
+  lastSyncDate: string;
+  associateStatus: string;
+}
+
+export interface EmailRequest {
+  emailIds: string[];
+}
+
+@Injectable({
+  providedIn: 'root'
+})
+export class NBKapi_call {
+  private readonly AD_CHECK_API = environment.apiUrls.adCheck;
+  private readonly CSAR_API = environment.apiUrls.csar;
+  private readonly EMAIL_TO_NBK_API = environment.apiUrls.emailToNbk;
+  private readonly BANKING_API = environment.apiUrls.banking;
+
+  constructor(private http: HttpClient) {}
+
+  getBankingDetails(nbks: string[]): Observable<Record<string, BankingResponse>> {
+    try {
+      console.log('NBKs being sent to banking API:', nbks);
+      
+      const formattedNbks = nbks.map(nbk => nbk.toUpperCase());
+      
+      const headers = new HttpHeaders()
+        .set(environment.bankingApi.key, environment.bankingApi.value);
+
+      return this.http.post<any>(this.BANKING_API, formattedNbks, { headers }).pipe(
+        tap(response => console.log('Raw banking API response:', response)),
+        map(response => {
+          if (Array.isArray(response)) {
+            return response.reduce((acc, item) => {
+              if (item && item.nbkid) {
+                acc[item.nbkid] = {
+                  nbkid: item.nbkid,
+                  EntitlementStartDate: item.EntitlementStartDate || '',
+                  LobName: item.LobName || '',
+                  JobName: item.JobName || '',
+                  LastSyncDate: item.LastSyncDate || ''
+                };
+              }
+              return acc;
+            }, {});
+          }
+          return response;
+        }),
+        catchError((error: HttpErrorResponse) => {
+          console.error('Banking API Error:', error);
+          return of({});
+        })
+      );
+    } catch (error) {
+      console.error('Error in getBankingDetails:', error);
+      return of({});
+    }
+  }
+
+  getNBKsFromEmails(emails: string[]): Observable<NBKrequirements[]> {
+    try {
+      const validEmails = emails.filter(email => email.toLowerCase().endsWith('@bofa.com'));
+      
+      if (validEmails.length === 0) {
+        return of([]);
+      }
+
+      const payload: EmailRequest = { emailIds: validEmails };
+
+      return this.http.post<string[]>(this.EMAIL_TO_NBK_API, payload).pipe(
+        mergeMap(nbks => {
+          if (!nbks || nbks.length === 0) {
+            return of([]);
+          }
+          const nbkRequests = nbks.map(nbk => this.getNBKrequirements(nbk));
+          return forkJoin(nbkRequests);
+        }),
+        catchError(() => of([]))
+      );
+    } catch (error) {
+      console.error('Error in getNBKsFromEmails:', error);
+      return of([]);
+    }
+  }
+
+  checkADGroup(nbk: string): Observable<boolean> {
+    try {
+      const url = `${this.AD_CHECK_API}/${nbk}`;
+      return this.http.get(url, { responseType: 'text' }).pipe(
+        map(response => response === "EXISTS"),
+        catchError(() => of(false))
+      );
+    } catch (error) {
+      console.error(`Error in checkADGroup for NBK ${nbk}:`, error);
+      return of(false);
+    }
+  }
+
+  checkCSAR(nbk: string): Observable<CSARResponse> {
+    try {
+      const url = `${this.CSAR_API}/${nbk}`;
+      return this.http.get<CSARResponse>(url).pipe(
+        catchError(() => of({
+          Associate: { Status: 'Unknown' },
+          IsAutoLogTouchpointEnable: false,
+          IsFromOutlookSync: false,
+          IsToOutSync: false,
+          AssociateShortName: 'Unknown'
+        }))
+      );
+    } catch (error) {
+      return of({
+        Associate: { Status: 'Unknown' },
+        IsAutoLogTouchpointEnable: false,
+        IsFromOutlookSync: false,
+        IsToOutSync: false,
+        AssociateShortName: 'Unknown'
+      });
+    }
+  }
+
+  getNBKrequirements(nbk: string): Observable<NBKrequirements> {
+    try {
+      return forkJoin({
+        adGroup: this.checkADGroup(nbk),
+        csarDetails: this.checkCSAR(nbk),
+        bankingDetails: this.getBankingDetails([nbk])
+      }).pipe(
+        map(results => {
+          const bankingData = results.bankingDetails[nbk];
+          
+          const formatDate = (dateStr: string) => {
+            if (!dateStr) return '-';
+            try {
+              return new Date(dateStr).toLocaleString();
+            } catch {
+              return dateStr;
+            }
+          };
+
+          if (!bankingData) {
+            return {
+              nbk,
+              name: results.csarDetails.AssociateShortName || 'Unknown',
+              adGroup: results.adGroup,
+              autoLog: results.csarDetails.IsAutoLogTouchpointEnable,
+              outFrom: results.csarDetails.IsFromOutlookSync,
+              outTo: results.csarDetails.IsToOutSync,
+              lob: '-',
+              lobStatus: false,
+              hangfireJob: '-',
+              hangfireStatus: false,
+              entitlementStartDate: '-',
+              lastSyncDate: '-',
+              associateStatus: results.csarDetails.Associate.Status
+            };
+          }
+
+          const lob = bankingData.LobName === 'MARKETS' ? 'Markets' : 
+                     bankingData.LobName === 'ECRM' ? 'Banking' : 
+                     bankingData.LobName || '-';
+
+          return {
+            nbk,
+            name: results.csarDetails.AssociateShortName || 'Unknown',
+            adGroup: results.adGroup,
+            autoLog: results.csarDetails.IsAutoLogTouchpointEnable,
+            outFrom: results.csarDetails.IsFromOutlookSync,
+            outTo: results.csarDetails.IsToOutSync,
+            lob,
+            lobStatus: bankingData.LobName === 'MARKETS',
+            hangfireJob: bankingData.JobName || '-',
+            hangfireStatus: !!bankingData.JobName,
+            entitlementStartDate: formatDate(bankingData.EntitlementStartDate),
+            lastSyncDate: formatDate(bankingData.LastSyncDate),
+            associateStatus: results.csarDetails.Associate.Status
+          };
+        }),
+        catchError(() => of({
+          nbk,
+          name: 'Unknown',
+          adGroup: false,
+          autoLog: false,
+          outFrom: false,
+          outTo: false,
+          lob: '-',
+          lobStatus: false,
+          hangfireJob: '-',
+          hangfireStatus: false,
+          entitlementStartDate: '-',
+          lastSyncDate: '-',
+          associateStatus: 'Unknown'
+        }))
+      );
+    } catch (error) {
+      console.error(`Error in getNBKrequirements for NBK ${nbk}:`, error);
+      return of({
+        nbk,
+        name: 'Unknown',
+        adGroup: false,
+        autoLog: false,
+        outFrom: false,
+        outTo: false,
+        lob: '-',
+        lobStatus: false,
+        hangfireJob: '-',
+        hangfireStatus: false,
+        entitlementStartDate: '-',
+        lastSyncDate: '-',
+        associateStatus: 'Unknown'
+      });
+    }
+  }
+}
