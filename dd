@@ -1,92 +1,58 @@
-getNBKrequirements(nbk: string): Observable<NBKrequirements> {
+getBankingDetails(nbks: string[]): Observable<Record<string, BankingResponse>> {
     try {
-      return forkJoin({
-        adGroup: this.checkADGroup(nbk),
-        csarDetails: this.checkCSAR(nbk),
-        bankingDetails: this.getBankingDetails([nbk])
-      }).pipe(
-        map(results => {
-          const bankingData = results.bankingDetails[nbk];
-          
-          const formatDate = (dateStr: string) => {
-            if (!dateStr) return '-';
-            try {
-              return new Date(dateStr).toLocaleString();
-            } catch {
-              return dateStr;
-            }
-          };
+      console.log('🏦 Banking API - Input NBKs:', nbks);
+      
+      const formattedNbks = nbks.map(nbk => nbk.toUpperCase());
+      console.log('🏦 Banking API - Formatted NBKs:', formattedNbks);
+      
+      const headers = new HttpHeaders()
+        .set(environment.bankingApi.key, environment.bankingApi.value);
 
-          if (!bankingData) {
-            return {
-              nbk,
-              name: results.csarDetails.AssociateShortName || 'Unknown',
-              adGroup: results.adGroup,
-              autoLog: results.csarDetails.IsAutoLogTouchpointEnable,
-              outFrom: results.csarDetails.IsFromOutlookSync,
-              outTo: results.csarDetails.IsToOutSync,
-              lob: '-',
-              lobStatus: false,
-              hangfireJob: '-',
-              hangfireStatus: false,
-              entitlementStartDate: '-',
-              lastSyncDate: '-',
-              associateStatus: results.csarDetails.Associate.Status
-            };
+      return this.http.post<any>(this.BANKING_API, formattedNbks, { headers }).pipe(
+        tap(response => {
+          console.log('🏦 Banking API - Raw Response:', response);
+          if (Array.isArray(response)) {
+            response.forEach(item => {
+              console.log('🏦 Banking API - Individual Item:', {
+                NbkId: item.NbkId || item.nbkid,
+                EntitlementStartDate: item.EntitlementStartDate,
+                LobName: item.LobName,
+                JobName: item.JobName,
+                LastSyncDate: item.LastSyncDate
+              });
+            });
           }
-
-          const lob = bankingData.LobName === 'MARKETS' ? 'Markets' : 
-                     bankingData.LobName === 'ECRM' ? 'Banking' : 
-                     bankingData.LobName || '-';
-
-          return {
-            nbk,
-            name: results.csarDetails.AssociateShortName || 'Unknown',
-            adGroup: results.adGroup,
-            autoLog: results.csarDetails.IsAutoLogTouchpointEnable,
-            outFrom: results.csarDetails.IsFromOutlookSync,
-            outTo: results.csarDetails.IsToOutSync,
-            lob,
-            lobStatus: bankingData.LobName === 'MARKETS',
-            hangfireJob: bankingData.JobName || '-',
-            hangfireStatus: !!bankingData.JobName,
-            entitlementStartDate: formatDate(bankingData.EntitlementStartDate),
-            lastSyncDate: formatDate(bankingData.LastSyncDate),
-            associateStatus: results.csarDetails.Associate.Status
-          };
         }),
-        catchError(() => of({
-          nbk,
-          name: 'Unknown',
-          adGroup: false,
-          autoLog: false,
-          outFrom: false,
-          outTo: false,
-          lob: '-',
-          lobStatus: false,
-          hangfireJob: '-',
-          hangfireStatus: false,
-          entitlementStartDate: '-',
-          lastSyncDate: '-',
-          associateStatus: 'Unknown'
-        }))
+        map(response => {
+          if (Array.isArray(response)) {
+            const transformed = response.reduce((acc, item) => {
+              if (item) {
+                const nbkId = item.NbkId || item.nbkid;
+                console.log(`🏦 Banking API - Processing NBK: ${nbkId}`, item);
+                
+                acc[nbkId] = {
+                  nbkid: nbkId,
+                  EntitlementStartDate: item.EntitlementStartDate || '',
+                  LobName: item.LobName || '',
+                  JobName: item.JobName || '',
+                  LastSyncDate: item.LastSyncDate || ''
+                };
+                console.log(`🏦 Banking API - Transformed data for ${nbkId}:`, acc[nbkId]);
+              }
+              return acc;
+            }, {});
+            console.log('🏦 Banking API - Final transformed data:', transformed);
+            return transformed;
+          }
+          return response || {};
+        }),
+        catchError((error: HttpErrorResponse) => {
+          console.error('🏦 Banking API - Error:', error);
+          return of({});
+        })
       );
     } catch (error) {
-      console.error(`Error in getNBKrequirements for NBK ${nbk}:`, error);
-      return of({
-        nbk,
-        name: 'Unknown',
-        adGroup: false,
-        autoLog: false,
-        outFrom: false,
-        outTo: false,
-        lob: '-',
-        lobStatus: false,
-        hangfireJob: '-',
-        hangfireStatus: false,
-        entitlementStartDate: '-',
-        lastSyncDate: '-',
-        associateStatus: 'Unknown'
-      });
+      console.error('🏦 Banking API - Unexpected error:', error);
+      return of({});
     }
   }
